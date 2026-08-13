@@ -197,7 +197,7 @@ A8W8_gemm1_heuristic_dispatch = """
         }}
         else if (block_m == 64)
         {{
-            if (inter_dim <= 192 || inter_dim % 128 != 0)
+            if (inter_dim <= 192)
             {{
                 return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 64, 64, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {Quant} == static_cast<int>(QuantType::per_Tensor), {MulRoutedWeight}, {ActOP}>;
             }}
@@ -208,14 +208,7 @@ A8W8_gemm1_heuristic_dispatch = """
         }}
         else if (block_m == 128)
         {{
-            // The V3 256x128x128 config below requires N (== inter_dim for
-            // stage1) to be a multiple of its NPerBlock (128); fall back to
-            // the NPerBlock=64 config -- verified divisible by common
-            // non-128-aligned inter_dim values (e.g. Gemma4-26B-A4B's 704)
-            // -- when it isn't, instead of hitting CK's runtime
-            // IsSupportedArgument rejection ("device_gemm ... does not
-            // support this GEMM problem").
-            if (inter_dim <= 192 || inter_dim % 128 != 0)
+            if (inter_dim <= 192)
             {{
                 return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 128, 64, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {Quant} == static_cast<int>(QuantType::per_Tensor), {MulRoutedWeight}, {ActOP}>;
             }}
@@ -226,7 +219,7 @@ A8W8_gemm1_heuristic_dispatch = """
         }}
         else if (block_m == 256)
         {{
-            if (inter_dim <= 192 || inter_dim % 128 != 0)
+            if (inter_dim <= 192)
             {{
                 return ck_moe_stage1_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 256, 64, 128/sizeof({A0DataType}), 1, 4, {Nswizzle}, {Quant} == static_cast<int>(QuantType::per_Tensor), {MulRoutedWeight}, {ActOP}>;
             }}
@@ -557,7 +550,7 @@ A8W8_gemm2_heuristic_dispatch = """
         }}
         else if (block_m == 64)
         {{
-            if (inter_dim <= 192 || inter_dim % 128 != 0)
+            if (inter_dim <= 192)
             {{
                 return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V1, 256, 64, 64, 64, 1, 4, {Nswizzle}, {Quant} == static_cast<int>(QuantType::per_Tensor), {MulRoutedWeight}, {ActOP}>;
             }}
@@ -568,11 +561,7 @@ A8W8_gemm2_heuristic_dispatch = """
         }}
         else if (block_m == 128)
         {{
-            // Same non-128-aligned-inter_dim fallback as stage1 (see
-            // A8W8_gemm1_heuristic_dispatch): the K==inter_dim GEMM
-            // dimension here must be a multiple of KPerBlock (128 in the
-            // else branch below); Gemma4-26B-A4B's inter_dim=704 isn't.
-            if (inter_dim <= 192 || inter_dim % 128 != 0)
+            if (inter_dim <= 192)
             {{
                 return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 128, 64, 64, 1, 4, {Nswizzle}, {Quant} == static_cast<int>(QuantType::per_Tensor), {MulRoutedWeight}, {ActOP}>;
             }}
@@ -583,7 +572,7 @@ A8W8_gemm2_heuristic_dispatch = """
         }}
         else if (block_m == 256)
         {{
-            if (inter_dim <= 192 || inter_dim % 128 != 0)
+            if (inter_dim <= 192)
             {{
                 return ck_moe_stage2_gemm<{A0DataType}, {B0DataType}, {AccDataType}, {EDataType}, {CDEElementOp}, V3, 256, 256, 64, 64, 1, 4, {Nswizzle}, {Quant} == static_cast<int>(QuantType::per_Tensor), {MulRoutedWeight}, {ActOP}>;
             }}
