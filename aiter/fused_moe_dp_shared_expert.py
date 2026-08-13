@@ -517,6 +517,8 @@ def get_2stage_cfgs(
         dtypes.fp16,
         torch.uint32,
         torch.uint8,
+        dtypes.fp4x2,
+        dtypes.fp8,
     ]:
         return MOEMetadata(
             functools.partial(
