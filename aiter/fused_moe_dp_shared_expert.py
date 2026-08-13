@@ -500,7 +500,12 @@ def get_2stage_cfgs(
         ksplit = cfg["ksplit"]
         kernelName1 = cfg["kernelName1"]
         kernelName2 = cfg["kernelName2"]
-        run_1stage = cfg.get("run_1stage", False)
+        # The 1-stage assembly MoE kernels have no GeluTanh variant; force
+        # 2-stage CK regardless of a tuned config's run_1stage, same guard as
+        # fused_moe.py's get_2stage_cfgs.
+        run_1stage = activation != ActivationType.GeluTanh and cfg.get(
+            "run_1stage", False
+        )
 
     tag = f"({kernelName1=}, {kernelName2=})"
     logger.info(
