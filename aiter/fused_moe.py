@@ -3264,13 +3264,6 @@ def ck_moe_stage1(
     KPerBlock = 256
     k_batch = (hidden_states.shape[1] // splitk) // KPerBlock if splitk > 1 else 1
     is_splitk = quant_type == QuantType.per_1x128 and splitk > 1 and k_batch >= 2
-    if not is_splitk and activation == ActivationType.GeluTanh:
-        # The fused CK stage1 GEMM+activation kernel has no GeluTanh ActOP
-        # variant; only the split-k path applies activation as a separate
-        # post-GEMM elementwise step that can use gelu_tanh_and_mul instead.
-        raise NotImplementedError(
-            "ck_moe_stage1 does not support GeluTanh activation on the non-splitk path"
-        )
     if is_splitk:
         # CK kernel zeros this buffer via hipMemsetAsync when KBatch > 1
         sorted_size = min(token_num * topk * block_m, sorted_token_ids.shape[0])

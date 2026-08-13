@@ -108,7 +108,28 @@ void ck_moe_stage1(torch::Tensor &hidden_states,     // [m, k], input token
         K *= 2;
     }
 
-    activation = !activation;
+    // `activation` arrives as AITER's ActivationType int (Silu=0, Gelu=1,
+    // Swiglu=2, Situv2=3, GeluTanh=4; see csrc/include/aiter_enum.h), but the
+    // generated heuristic-dispatch/lookup tables key on CK's own ActOP
+    // encoding (gelu=0, silu=1, gelu_tanh=4; see CK_ACTIVATION_OP in
+    // gen_instances.py, matching ck::Activation in composable_kernel).
+    // Only Silu/Gelu differ between the two encodings (a plain swap); other
+    // values already coincide numerically but should not rely on that by
+    // accident, so this is an explicit map rather than the previous
+    // `activation = !activation` boolean negation (which silently produced
+    // 0 for any activation > 1, e.g. GeluTanh=4 -> !4 -> 0 -> misdispatched
+    // to the Gelu kernel).
+    switch (activation)
+    {
+    case 0: // AITER Silu -> CK ActOP silu
+        activation = 1;
+        break;
+    case 1: // AITER Gelu -> CK ActOP gelu
+        activation = 0;
+        break;
+    default:
+        break;
+    }
 
     auto kernel = moe_dispatch<1>(kernelName, MPerBlock, N, hidden_states.dtype().toScalarType(), w1.dtype().toScalarType(), out.dtype().toScalarType(), activation, quant_type, MulRoutedWeight, is_shuffled);
 

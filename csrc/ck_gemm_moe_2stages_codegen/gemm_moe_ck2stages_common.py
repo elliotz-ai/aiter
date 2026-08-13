@@ -29,13 +29,18 @@ class kernelInstanceGEMM1:
     GemmPipelineVersion: int
     Nswizzle: bool = False
     MulRoutedWeight: bool = False
-    ActOP: bool = False
+    # CK ActOP encoding (matches ck::Activation in composable_kernel):
+    # gelu=0, silu=1, gelu_tanh=4. See CK_ACTIVATION_OP in gen_instances.py.
+    ActOP: int = 0
     CDEElementOp: str = "TypeCast"
     QuantType: int = 1
     stage: int = 1
     Adtype: str = ""
     Bdtype: str = ""
     Cdtype: str = ""
+
+    # Must stay in sync with CK_ACTIVATION_OP in gen_instances.py.
+    _ACTOP_NAMES = {0: "gelu", 1: "silu", 4: "gelu_tanh"}
 
     @property
     def name(self) -> str:
@@ -59,7 +64,7 @@ class kernelInstanceGEMM1:
                 "Nswizzle" + str(int(self.Nswizzle)),
                 "Quant" + str(self.QuantType),
                 "MulRoutedWeight" + str(int(self.MulRoutedWeight)),
-                "silu" if self.ActOP else "gelu",
+                self._ACTOP_NAMES[self.ActOP],
                 self.Adtype.upper(),
                 self.Bdtype.upper(),
                 self.Cdtype.upper(),
@@ -363,6 +368,15 @@ bit16_list = ["B16", "F16", "b16", "f16"]
 bit4_list = ["I4", "i4", "FP4X2", "fp4x2"]
 QuantType_list = [3, 4]
 
+# Must match ck::Activation in
+# include/ck/tensor_operation/gpu/grid/gridwise_gemm_xdl_cshuffle_common.hpp,
+# and CK_ACTIVATION_OP in gen_instances.py.
+ACTIVATION_STR_TO_ACTOP = {
+    "gelu": 0,
+    "silu": 1,
+    "gelu_tanh": 4,
+}
+
 
 def get_gemm1_kernels_list(
     Adtype: str,
@@ -410,7 +424,7 @@ def get_gemm1_kernels_list(
     kernels_list = {k: copy.deepcopy(v) for k, v in gemm1_kernels_dict[tag].items()}
     for id, kernel in kernels_list.items():
         kernel.MulRoutedWeight = MulRoutedWeight
-        kernel.ActOP = ActOP == "silu"
+        kernel.ActOP = ACTIVATION_STR_TO_ACTOP[ActOP]
         kernel.Nswizzle = Nswizzle
         kernel.QuantType = QuantType
         kernel.Adtype = Adtype

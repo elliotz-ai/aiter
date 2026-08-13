@@ -3,7 +3,16 @@
 import os
 import argparse
 import itertools
-from gemm_moe_ck2stages_common import get_gemm1_kernels_list, get_gemm2_kernels_list
+from gemm_moe_ck2stages_common import (
+    ACTIVATION_STR_TO_ACTOP,
+    get_gemm1_kernels_list,
+    get_gemm2_kernels_list,
+)
+
+
+def act_op(activation: str) -> int:
+    return ACTIVATION_STR_TO_ACTOP[activation]
+
 
 STG_INSTANCE_IMPL = """// SPDX-License-Identifier: MIT
 // Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
@@ -926,9 +935,7 @@ class ck_moe_2stage_gemm_codegen:
                             Nswizzle=str(self.nswizzle).lower(),
                             Quant=self.quant_type,
                             ActOP=(
-                                int(self.activation == "silu")
-                                if kernel.stage == 1
-                                else 0
+                                act_op(self.activation) if kernel.stage == 1 else 0
                             ),
                             Stage=kernel.stage,
                             BlockSize=kernel.BLOCK_SIZE,
@@ -958,7 +965,7 @@ class ck_moe_2stage_gemm_codegen:
                     CDEElementOp=kernel.CDEElementOp,
                     Nswizzle=str(self.nswizzle).lower(),
                     Quant=self.quant_type,
-                    ActOP=int(self.activation == "silu") if kernel.stage == 1 else 0,
+                    ActOP=act_op(self.activation) if kernel.stage == 1 else 0,
                     Stage=kernel.stage,
                     BlockSize=kernel.BLOCK_SIZE,
                     MPerBlock=kernel.MPerBlock,
@@ -989,7 +996,7 @@ class ck_moe_2stage_gemm_codegen:
                 CDEElementOp=kernel_list[0].CDEElementOp,
                 Nswizzle=str(self.nswizzle).lower(),
                 Quant=self.quant_type,
-                ActOP=str(int(self.activation == "silu")),
+                ActOP=str(act_op(self.activation)),
                 MulRoutedWeight=str(self.mul_routed_weight_stage == 1).lower(),
                 Preshuffle=str(self.preshuffle).lower(),
             )
@@ -1071,7 +1078,7 @@ if __name__ == "__main__":
         default="silu",
         required=False,
         type=str,
-        choices=["silu", "gelu"],
+        choices=["silu", "gelu", "gelu_tanh"],
         help="select activation",
     )
 
@@ -1125,7 +1132,7 @@ if __name__ == "__main__":
         # quanted moe
         b_quant_dtypes = ["f8", "i8", "i4", "fp4x2"]
         c_dtypes = ["f16", "b16"]
-        acts = ["silu", "gelu"]
+        acts = ["silu", "gelu", "gelu_tanh"]
         routed_weight_l = [1, 2]
         general_quant_l = ["per_tensor", "per_token"]
         preshuffle_mode_l = [True, False]
