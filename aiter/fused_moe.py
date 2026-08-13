@@ -1916,7 +1916,7 @@ def get_2stage_cfgs(
         run_1stage_xbf16 = False
         # No tuned config => default host moe_sort. For FLAT, run tuner and set flat=1.
         cfg_flat = False
-        if (
+        if activation != ActivationType.GeluTanh and (
             activation,
             q_type,
             dtype,
@@ -1925,6 +1925,10 @@ def get_2stage_cfgs(
             use_g1u1,
             doweight_stage1,
         ) in fused_moe_1stage_dict.get(get_gfx(), {}):
+            # The 1-stage assembly MoE kernels (fmoe_g1u1 / fmoe_fp8_blockscale_g1u1)
+            # have no GeluTanh variant and no assembly source to add one from; only
+            # the 2-stage CK path supports GeluTanh, so GeluTanh never takes this
+            # heuristic 1-stage branch, for any q_type/arch.
             if q_type == QuantType.per_1x128:
                 # for fp8 blockscale, ck has better performance so disable assembly kernel
                 run_1stage = token > 32 and (inter_dim % 128 == 0)
@@ -1968,7 +1972,9 @@ def get_2stage_cfgs(
             ksplit = 0
         kernelName1 = cfg["kernelName1"]
         kernelName2 = cfg["kernelName2"]
-        run_1stage = cfg.get("run_1stage", False)
+        run_1stage = activation != ActivationType.GeluTanh and cfg.get(
+            "run_1stage", False
+        )
         if not is_shuffled and not run_1stage:
             logger.warning(
                 f"[fused_moe] tuned config found for {keys} but is_shuffled=False. "
