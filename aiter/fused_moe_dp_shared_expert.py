@@ -829,6 +829,8 @@ def asm_stage1(
     if ksplit > 0:
         if activation == ActivationType.Silu:
             aiter.silu_and_mul(out, tmp_out.view(dtypes.fp32).to(dtype))
+        elif activation == ActivationType.GeluTanh:
+            aiter.gelu_tanh_and_mul(out, tmp_out.view(dtypes.fp32).to(dtype))
         else:
             aiter.gelu_and_mul(out, tmp_out.view(dtypes.fp32).to(dtype))
     return out

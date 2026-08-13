@@ -2898,6 +2898,8 @@ def asm_stage1(
             aiter.silu_and_mul(out, tmp_out.view(dtypes.fp32))
         elif activation == ActivationType.Swiglu:
             aiter.swiglu_and_mul(out, tmp_out.view(dtypes.fp32))
+        elif activation == ActivationType.GeluTanh:
+            aiter.gelu_tanh_and_mul(out, tmp_out.view(dtypes.fp32))
         else:
             aiter.gelu_and_mul(out, tmp_out.view(dtypes.fp32))
     return out
@@ -3262,6 +3264,13 @@ def ck_moe_stage1(
     KPerBlock = 256
     k_batch = (hidden_states.shape[1] // splitk) // KPerBlock if splitk > 1 else 1
     is_splitk = quant_type == QuantType.per_1x128 and splitk > 1 and k_batch >= 2
+    if not is_splitk and activation == ActivationType.GeluTanh:
+        # The fused CK stage1 GEMM+activation kernel has no GeluTanh ActOP
+        # variant; only the split-k path applies activation as a separate
+        # post-GEMM elementwise step that can use gelu_tanh_and_mul instead.
+        raise NotImplementedError(
+            "ck_moe_stage1 does not support GeluTanh activation on the non-splitk path"
+        )
     if is_splitk:
         # CK kernel zeros this buffer via hipMemsetAsync when KBatch > 1
         sorted_size = min(token_num * topk * block_m, sorted_token_ids.shape[0])
@@ -3294,7 +3303,12 @@ def ck_moe_stage1(
         valid_out = tmp_out[: token_num * topk, :]
         if activation == ActivationType.Silu:
             aiter.silu_and_mul(out, valid_out.view(dtypes.fp32))
+        elif activation == ActivationType.GeluTanh:
+            aiter.gelu_tanh_and_mul(out, valid_out.view(dtypes.fp32))
         else:
+            # Pre-existing behavior: Gelu and Swiglu (and anything else) fall
+            # through to gelu_and_mul here; preserved as-is, only GeluTanh is
+            # newly split out since it needs a distinct kernel.
             aiter.gelu_and_mul(out, valid_out.view(dtypes.fp32))
     return out
 
@@ -3340,6 +3354,12 @@ def cktile_moe_stage1(
     ):
         out = torch.empty(expected_out_shape, dtype=dtype, device=hidden_states.device)
     needs_post_activation = split_k > 1
+    if not needs_post_activation and activation == ActivationType.GeluTanh:
+        # CK-Tile's fused gate/up epilogue has no GeluTanh variant; only the
+        # split-k path applies activation as a separate post-GEMM step.
+        raise NotImplementedError(
+            "cktile_moe_stage1 does not support GeluTanh activation on the non-split-k path"
+        )
     # Split-k reduces into a token-topk workspace and applies activation after
     # reduction. Non-split legacy A16W4 keeps CK-Tile's fused gate/up epilogue.
     workspace_rows = token_num * topk
@@ -3419,7 +3439,16 @@ def cktile_moe_stage1(
                 flat = valid_out.view(-1, N0, 2, NLane)
                 gate = flat[:, :, 0, :].reshape(-1, inter_dim)
                 up = flat[:, :, 1, :].reshape(-1, inter_dim)
-                out.view(-1, inter_dim).copy_(torch.nn.functional.gelu(gate) * up)
+                # Pre-existing behavior: Gelu and anything else not handled
+                # above falls through to erf-GELU math here; preserved as-is,
+                # only GeluTanh is newly split out since it needs the tanh
+                # approximation instead.
+                approximate = (
+                    "tanh" if activation == ActivationType.GeluTanh else "none"
+                )
+                out.view(-1, inter_dim).copy_(
+                    torch.nn.functional.gelu(gate, approximate=approximate) * up
+                )
         else:
             if bias1 is not None and topk_ids is None:
                 raise ValueError(
@@ -3436,6 +3465,8 @@ def cktile_moe_stage1(
                 aiter.silu_and_mul(out, valid_out)
             elif activation == ActivationType.Swiglu:
                 aiter.swiglu_and_mul(out, valid_out)
+            elif activation == ActivationType.GeluTanh:
+                aiter.gelu_tanh_and_mul(out, valid_out)
             else:
                 aiter.gelu_and_mul(out, valid_out)
     return out

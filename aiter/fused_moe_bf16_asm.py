@@ -375,8 +375,12 @@ def ck_moe_2stages(
 
     if activation == ActivationType.Silu:
         act_op = 1  # silu_and_mul
-    else:
+    elif activation == ActivationType.Gelu:
         act_op = 0  # gelu_and_mul
+    else:
+        raise NotImplementedError(
+            f"ck_moe_stage1 (legacy act_op interface) does not support activation {activation}"
+        )
 
     aiter.ck_moe_stage1(
         a1,
@@ -481,11 +485,15 @@ def torch_moe(
                 gate, up = act_input.split([inter_dim, inter_dim], dim=-1)
                 if activation == ActivationType.Gelu:
                     act_out = F.gelu(gate) * up
+                elif activation == ActivationType.GeluTanh:
+                    act_out = F.gelu(gate, approximate="tanh") * up
                 else:
                     act_out = F.silu(gate) * up
             else:
                 if activation == ActivationType.Gelu:
                     act_out = F.gelu(act_input)
+                elif activation == ActivationType.GeluTanh:
+                    act_out = F.gelu(act_input, approximate="tanh")
                 else:
                     act_out = F.silu(act_input)
             if fc2_smooth_scale is not None:
@@ -562,11 +570,15 @@ def torch_moe_tkw1(
                 up = up * (topk_weight.view(B, -1, 1)[mask])
                 if activation == ActivationType.Gelu:
                     act_out = F.gelu(gate) * up
+                elif activation == ActivationType.GeluTanh:
+                    act_out = F.gelu(gate, approximate="tanh") * up
                 else:
                     act_out = F.silu(gate) * up
             else:
                 if activation == ActivationType.Gelu:
                     act_out = F.gelu(act_input)
+                elif activation == ActivationType.GeluTanh:
+                    act_out = F.gelu(act_input, approximate="tanh")
                 else:
                     act_out = F.silu(act_input)
             if fc2_smooth_scale is not None:
