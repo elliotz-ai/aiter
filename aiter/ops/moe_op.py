@@ -11,6 +11,18 @@ import functools
 
 torch.int4 = getattr(torch, "int4", torch.uint32)
 
+# Explicit mapping from ActivationType to the CK codegen's activation string
+# (gen_instances.py --activation choices), rather than deriving it from the
+# enum's str()/repr() -- that's fragile (e.g. `str2ActivationType`'s prior
+# bare-`.capitalize()` bug for multi-word names) and this way the string is
+# defined once, here, not inherited from however the pybind11 enum happens
+# to stringify.
+_ACTIVATION_TO_CODEGEN_STR = {
+    ActivationType.Silu: "silu",
+    ActivationType.Gelu: "gelu",
+    ActivationType.GeluTanh: "gelu_tanh",
+}
+
 
 @compile_ops("module_moe_asm", fc_name="topk_softmax", develop=True)
 def _topk_softmax(
@@ -560,7 +572,7 @@ def get_moe_stage_module(
     quant_type = (
         QuantType.per_1x128 if quant_type == QuantType.per_128x128 else quant_type
     )
-    act = str(activation).split(".")[-1].lower()
+    act = _ACTIVATION_TO_CODEGEN_STR[activation]
     quant_type = str(quant_type).split(".")[-1].lower()
 
     parts = [

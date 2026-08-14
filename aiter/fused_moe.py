@@ -1916,7 +1916,7 @@ def get_2stage_cfgs(
         run_1stage_xbf16 = False
         # No tuned config => default host moe_sort. For FLAT, run tuner and set flat=1.
         cfg_flat = False
-        if (
+        if activation != ActivationType.GeluTanh and (
             activation,
             q_type,
             dtype,
@@ -1925,6 +1925,10 @@ def get_2stage_cfgs(
             use_g1u1,
             doweight_stage1,
         ) in fused_moe_1stage_dict.get(get_gfx(), {}):
+            # The 1-stage assembly MoE kernels (fmoe_g1u1 / fmoe_fp8_blockscale_g1u1)
+            # have no GeluTanh variant and no assembly source to add one from; only
+            # the 2-stage CK path supports GeluTanh, so GeluTanh never takes this
+            # heuristic 1-stage branch, for any q_type/arch.
             if q_type == QuantType.per_1x128:
                 # for fp8 blockscale, ck has better performance so disable assembly kernel
                 run_1stage = token > 32 and (inter_dim % 128 == 0)
@@ -1968,7 +1972,9 @@ def get_2stage_cfgs(
             ksplit = 0
         kernelName1 = cfg["kernelName1"]
         kernelName2 = cfg["kernelName2"]
-        run_1stage = cfg.get("run_1stage", False)
+        run_1stage = activation != ActivationType.GeluTanh and cfg.get(
+            "run_1stage", False
+        )
         if not is_shuffled and not run_1stage:
             logger.warning(
                 f"[fused_moe] tuned config found for {keys} but is_shuffled=False. "
@@ -2892,6 +2898,8 @@ def asm_stage1(
             aiter.silu_and_mul(out, tmp_out.view(dtypes.fp32))
         elif activation == ActivationType.Swiglu:
             aiter.swiglu_and_mul(out, tmp_out.view(dtypes.fp32))
+        elif activation == ActivationType.GeluTanh:
+            aiter.gelu_tanh_and_mul(out, tmp_out.view(dtypes.fp32))
         else:
             aiter.gelu_and_mul(out, tmp_out.view(dtypes.fp32))
     return out
@@ -3288,7 +3296,12 @@ def ck_moe_stage1(
         valid_out = tmp_out[: token_num * topk, :]
         if activation == ActivationType.Silu:
             aiter.silu_and_mul(out, valid_out.view(dtypes.fp32))
+        elif activation == ActivationType.GeluTanh:
+            aiter.gelu_tanh_and_mul(out, valid_out.view(dtypes.fp32))
         else:
+            # Pre-existing behavior: Gelu and Swiglu (and anything else) fall
+            # through to gelu_and_mul here; preserved as-is, only GeluTanh is
+            # newly split out since it needs a distinct kernel.
             aiter.gelu_and_mul(out, valid_out.view(dtypes.fp32))
     return out
 
@@ -3334,6 +3347,12 @@ def cktile_moe_stage1(
     ):
         out = torch.empty(expected_out_shape, dtype=dtype, device=hidden_states.device)
     needs_post_activation = split_k > 1
+    if not needs_post_activation and activation == ActivationType.GeluTanh:
+        # CK-Tile's fused gate/up epilogue has no GeluTanh variant; only the
+        # split-k path applies activation as a separate post-GEMM step.
+        raise NotImplementedError(
+            "cktile_moe_stage1 does not support GeluTanh activation on the non-split-k path"
+        )
     # Split-k reduces into a token-topk workspace and applies activation after
     # reduction. Non-split legacy A16W4 keeps CK-Tile's fused gate/up epilogue.
     workspace_rows = token_num * topk
@@ -3413,7 +3432,16 @@ def cktile_moe_stage1(
                 flat = valid_out.view(-1, N0, 2, NLane)
                 gate = flat[:, :, 0, :].reshape(-1, inter_dim)
                 up = flat[:, :, 1, :].reshape(-1, inter_dim)
-                out.view(-1, inter_dim).copy_(torch.nn.functional.gelu(gate) * up)
+                # Pre-existing behavior: Gelu and anything else not handled
+                # above falls through to erf-GELU math here; preserved as-is,
+                # only GeluTanh is newly split out since it needs the tanh
+                # approximation instead.
+                approximate = (
+                    "tanh" if activation == ActivationType.GeluTanh else "none"
+                )
+                out.view(-1, inter_dim).copy_(
+                    torch.nn.functional.gelu(gate, approximate=approximate) * up
+                )
         else:
             if bias1 is not None and topk_ids is None:
                 raise ValueError(
@@ -3430,6 +3458,8 @@ def cktile_moe_stage1(
                 aiter.silu_and_mul(out, valid_out)
             elif activation == ActivationType.Swiglu:
                 aiter.swiglu_and_mul(out, valid_out)
+            elif activation == ActivationType.GeluTanh:
+                aiter.gelu_tanh_and_mul(out, valid_out)
             else:
                 aiter.gelu_and_mul(out, valid_out)
     return out

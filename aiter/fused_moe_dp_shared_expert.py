@@ -500,7 +500,12 @@ def get_2stage_cfgs(
         ksplit = cfg["ksplit"]
         kernelName1 = cfg["kernelName1"]
         kernelName2 = cfg["kernelName2"]
-        run_1stage = cfg.get("run_1stage", False)
+        # The 1-stage assembly MoE kernels have no GeluTanh variant; force
+        # 2-stage CK regardless of a tuned config's run_1stage, same guard as
+        # fused_moe.py's get_2stage_cfgs.
+        run_1stage = activation != ActivationType.GeluTanh and cfg.get(
+            "run_1stage", False
+        )
 
     tag = f"({kernelName1=}, {kernelName2=})"
     logger.info(
@@ -512,6 +517,8 @@ def get_2stage_cfgs(
         dtypes.fp16,
         torch.uint32,
         torch.uint8,
+        dtypes.fp4x2,
+        dtypes.fp8,
     ]:
         return MOEMetadata(
             functools.partial(
@@ -829,6 +836,8 @@ def asm_stage1(
     if ksplit > 0:
         if activation == ActivationType.Silu:
             aiter.silu_and_mul(out, tmp_out.view(dtypes.fp32).to(dtype))
+        elif activation == ActivationType.GeluTanh:
+            aiter.gelu_tanh_and_mul(out, tmp_out.view(dtypes.fp32).to(dtype))
         else:
             aiter.gelu_and_mul(out, tmp_out.view(dtypes.fp32).to(dtype))
     return out

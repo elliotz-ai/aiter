@@ -78,7 +78,13 @@ def _normalize_quant_type(quant_type: str) -> str:
 
 
 def _normalize_activation(activation: str) -> str:
-    return _normalize_enum_str(activation)
+    # "GeluTanh" doesn't lowercase to a valid gen_instances.py --activation
+    # choice ("gelutanh" != "gelu_tanh"), so this multi-word name needs an
+    # explicit case, unlike the other (single-word) activation names.
+    normalized = _normalize_enum_str(activation)
+    if normalized == "gelutanh":
+        return "gelu_tanh"
+    return normalized
 
 
 def _infer_preshuffle_modes(b_dtype: str, quant_type: str) -> List[bool]:
