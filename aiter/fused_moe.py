@@ -784,6 +784,29 @@ def fused_moe_(
             local_topk_ids = None
     _opus_a8w4.check_route_bucket_metadata(metadata, sorted_expert_ids, logger)
 
+    # Known-defect guard (a16w16 / QuantType.No): the CK 2-stage path silently
+    # corrupts output at topk>1 — corruption scales with routed-weight magnitude
+    # and is exact at topk=1. See the defect report (aiter-a16w16-bf16-defect.md).
+    # Fail loudly instead of returning plausible-but-wrong tokens. The guard sits
+    # after metadata dispatch so 1-stage/other-quant paths are unaffected.
+    AITER_ALLOW_A16W16_TOPK_GT1 = (
+        os.environ.get("AITER_ALLOW_A16W16_TOPK_GT1", "0") == "1"
+    )
+    if (
+        not AITER_ALLOW_A16W16_TOPK_GT1
+        and quant_type == QuantType.No
+        and q_dtype_w == dtypes.bf16
+        and topk > 1
+        and not metadata.run_1stage
+    ):
+        raise RuntimeError(
+            "a16w16 (bf16, QuantType.No) CK 2-stage MoE silently corrupts output "
+            f"at topk={topk} > 1 (sort/scatter expert-pairing defect; corruption "
+            "scales with routed-weight magnitude). topk=1 is exact. Set "
+            "AITER_ALLOW_A16W16_TOPK_GT1=1 to override at your own risk. See "
+            "aiter-a16w16-bf16-defect.md."
+        )
+
     if metadata.run_1stage:
         _stage1_call = functools.partial(
             metadata.stage1,
