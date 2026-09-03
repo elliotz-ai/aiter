@@ -155,6 +155,14 @@ def test_fmoe(
 
     topk_weights, topk_ids = fused_topk(input, score, topk, True)
 
+    # Deterministic weight-magnitude sweep hook (a16w16 defect coverage):
+    # scale the routed weights up so the a16w16 topk>1 sort/scatter corruption
+    # (error proportional to weight magnitude, masked at unit scale by the
+    # 1%+1% tolerance) is exposed instead of hidden. Default 1.0 = unchanged.
+    _wscale = float(os.environ.get("AITER_MOE_TOPK_WEIGHT_SCALE", "1.0"))
+    if _wscale != 1.0:
+        topk_weights = topk_weights * _wscale
+
     if qType == aiter.QuantType.per_Tensor:
         w1_qt, w1_scale = aiter.pertoken_quant(w1.view(E, -1), quant_dtype=WQDType)
         w2_qt, w2_scale = aiter.pertoken_quant(w2.view(E, -1), quant_dtype=WQDType)
@@ -723,6 +731,15 @@ parser.add_argument(
     help="Skip the default SiTUv2 (per_1x32 fp4/fp8) FlyDSL cases.",
 )
 parser.add_argument(
+    "--a16w16-magnitude-sweep",
+    action="store_true",
+    help="Run the a16w16 (QuantType.No) weight-magnitude sweep: gemma4-like "
+    "shapes (2816/768, E=128) at topk 1/4/8 with AITER_MOE_TOPK_WEIGHT_SCALE=8. "
+    "Documents the topk>1 sort/scatter corruption from "
+    "aiter-a16w16-bf16-defect.md: topk=1 stays exact, topk>1 exceeds tolerance "
+    "(expected FAIL until the defect is fixed).",
+)
+parser.add_argument(
     "--kernel",
     action="store_true",
     help="""Time the stage1 / stage2 kernels in isolation (loop each launch
@@ -944,6 +961,39 @@ def _runtime_swiglu_mxfp4_q_dtype_a(
     return dtypes.bf16 if get_gfx() != "gfx950" or token < bound else dtypes.fp8
 
 
+def _iter_a16w16_magnitude_cases():
+    """Yield weight-magnitude-sweep cases for the a16w16 (QuantType.No) path.
+
+    The a16w16 topk>1 sort/scatter defect produces error proportional to the
+    routed-weight magnitude; at the default unit-scale weights the max delta
+    hides inside checkAllclose's 1%+1% tolerance, so plain a16w16 cases pass
+    despite wrong results. Scaling topk_weights up (AITER_MOE_TOPK_WEIGHT_SCALE,
+    set by --a16w16-magnitude-sweep) amplifies the corruption deterministically:
+    the topk>1 cases exceed tolerance and fail loudly while the topk=1 controls
+    stay exact — the signature in aiter-a16w16-bf16-defect.md.
+    """
+    extras = {"model": "a16w16-magnitude"}
+    base = dict(
+        dtype=dtypes.bf16,
+        model_dim=2816,
+        inter_dim=768,
+        E=128,
+        actType=aiter.ActivationType.GeluTanh,
+        gateMode=GateMode.SEPARATED.value,
+        qType=aiter.QuantType.No,
+        AQDType=None,
+        WQDType=None,
+        use_g1u1=True,
+        doweight_stage1=True,
+        strict_accuracy=False,
+        check_aot_cache=False,
+    )
+    for token in (8, 64, 256):
+        for topk in (1, 4, 8):
+            kwargs = dict(base, token=token, topk=topk)
+            yield kwargs, dict(extras, token=token, topk=topk)
+
+
 def _iter_legacy_cases():
     """Yield (kwargs, extras) for the original CLI-driven sweep."""
     extras = {"model": "legacy"}
@@ -1136,14 +1186,21 @@ def _iter_situv2_default_cases():
 # Run
 # ---------------------------------------------------------------------------
 _case_iters = []
-if not args.no_flydsl_csv:
-    _case_iters.append(_iter_csv_cases())
-if not args.no_legacy:
-    _case_iters.append(_iter_legacy_cases())
-# SiTUv2 default coverage runs only in a full default sweep (no explicit -q),
-# so an explicit quant selection is never silently overridden.
-if not args.no_situv2 and args.quant is None:
-    _case_iters.append(_iter_situv2_default_cases())
+if args.a16w16_magnitude_sweep:
+    _case_iters.append(_iter_a16w16_magnitude_cases())
+else:
+    if not args.no_flydsl_csv:
+        _case_iters.append(_iter_csv_cases())
+    if not args.no_legacy:
+        _case_iters.append(_iter_legacy_cases())
+    # SiTUv2 default coverage runs only in a full default sweep (no explicit -q),
+    # so an explicit quant selection is never silently overridden.
+    if not args.no_situv2 and args.quant is None:
+        _case_iters.append(_iter_situv2_default_cases())
+if args.a16w16_magnitude_sweep:
+    # Amplify routed weights so the topk>1 corruption exceeds tolerance (the
+    # defect's error is proportional to weight magnitude; unit scale masks it).
+    os.environ["AITER_MOE_TOPK_WEIGHT_SCALE"] = "8.0"
 case_iter = itertools.chain(*_case_iters)
 
 _csv_out = os.environ.get("AITER_TUNED_OP_BENCH_CSV", "tuned_op_bench.csv")
